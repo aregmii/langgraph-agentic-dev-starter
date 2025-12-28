@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+
+# Java
+target/
+*.class
+*.jar
+.gradle/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Kubernetes
+*.local.yaml
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Logs
+*.log
