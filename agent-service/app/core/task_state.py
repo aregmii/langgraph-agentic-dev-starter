@@ -1,26 +1,16 @@
 """
 Task State Definition
 
-This module defines the state of a task as it flows through
-the LangGraph agent workflow. Each node receives state,
-performs work, and returns updated state.
-
-Extension point: Additional fields can be added here to track additional info as it flows through the workflow.
+State of a task as it flows through the code agent workflow.
 """
 
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
-from datetime import datetime
-
+from datetime import datetime, timezone
 
 class TaskType(str, Enum):
-    """
-    Supported task types.
-    
-    Extension point: Add new task types here when extending
-    the agent's capabilities.
-    """
+    """What kind of coding task is this?"""
     CODE_GENERATION = "code_generation"
     CODE_FIX = "code_fix"
     CODE_REFACTOR = "code_refactor"
@@ -29,45 +19,27 @@ class TaskType(str, Enum):
 
 
 class TaskStatus(str, Enum):
-    """
-    Task lifecycle status.
-    
-    Updated when ENTERING a stage. Terminal states are
-    COMPLETED and FAILED.
-    """
+    """Current step in the workflow."""
     PENDING = "pending"           # Created, not yet started
-    IN_ROUTING = "in_routing"     # Being routed to appropriate handler
-    IN_EXECUTION = "in_execution" # Code being generated/modified
-    IN_EVALUATION = "in_evaluation" # Output being evaluated
-    COMPLETED = "completed"       # Successfully finished (terminal)
-    FAILED = "failed"             # Failed after retries (terminal)
+    IDENTIFYING = "identifying"   # Determining task type
+    EXECUTING = "executing"       # LLM generating code
+    EVALUATING = "evaluating"     # Checking output quality
+    RETRYING = "retrying"         # Failed, attempting again
+    COMPLETED = "completed"       # Success (terminal)
+    FAILED = "failed"             # Failed permanently (terminal)
 
 
 @dataclass
 class TaskState:
-    """
-    State of a single task flowing through the agent workflow.
+    """State of a single task flowing through the workflow."""
     
-    Each node in the graph receives this state, performs its work,
-    and returns an updated state. This design enables:
-    - Full traceability of agent decisions
-    - Easy serialization for async queue processing
-    - Clean separation between nodes
-    
-    Example:
-        state = TaskState(
-            task_id="abc-123",
-            task_type=TaskType.CODE_GENERATION,
-            input_description="Write a function to sort a list"
-        )
-    """
     # Identity
     task_id: str
     task_type: TaskType
     
     # Input
     input_description: str
-    context: Optional[str] = None  # Additional context (e.g., existing code)
+    context: Optional[str] = None
     
     # Output
     generated_code: Optional[str] = None
@@ -86,25 +58,15 @@ class TaskState:
     error_message: Optional[str] = None
     
     # Metadata
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     def with_updates(self, **kwargs) -> "TaskState":
-        """
-        Create a new state with updated fields.
-        
-        This maintains immutability - we never modify state in place.
-        
-        Example:
-            new_state = state.with_updates(
-                status=TaskStatus.IN_EXECUTION,
-                generated_code="def sort_list(lst): ..."
-            )
-        """
+        """Create a new state with updated fields."""
         from dataclasses import asdict
         current = asdict(self)
         current.update(kwargs)
-        current["updated_at"] = datetime.utcnow()
+        current["updated_at"] = datetime.now(timezone.utc)  # Updated timestamp
         return TaskState(**current)
     
     def is_retriable(self) -> bool:
@@ -113,4 +75,7 @@ class TaskState:
     
     def increment_retry(self) -> "TaskState":
         """Return new state with incremented retry count."""
-        return self.with_updates(retry_count=self.retry_count + 1)
+        return self.with_updates(
+            retry_count=self.retry_count + 1,
+            status=TaskStatus.RETRYING
+        )
