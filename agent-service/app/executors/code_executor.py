@@ -12,6 +12,7 @@ from app.executors.prompts import (
     CODE_REFACTOR_SYSTEM, CODE_REFACTOR_TEMPLATE,
     CODE_TESTING_SYSTEM, CODE_TESTING_TEMPLATE,
     CODE_REVIEW_SYSTEM, CODE_REVIEW_TEMPLATE,
+    format_context_section,
 )
 
 
@@ -48,11 +49,18 @@ class CodeExecutor:
         system_prompt, template = self.PROMPTS[state.task_type]
         
         # Build the prompt
-        prompt = template.format(
-            user_input=state.input_description,
-            context=state.context or "No additional context provided",
-        )
-        
+        if state.task_type == TaskType.CODE_GENERATION:
+                prompt = template.format(
+                    user_input=state.input_description,
+                    context_section=format_context_section(state.context),
+                )
+
+        else:
+            prompt = template.format(
+                user_input=state.input_description,
+                existing_code=state.context or "No code provided",
+            )
+
         # Call LLM
         if state.context:
             response = await self.llm_client.generate_with_context(
@@ -68,6 +76,16 @@ class CodeExecutor:
         
         # Return updated state
         return state.with_updates(
-            status=TaskStatus.IN_EVALUATION,
-            generated_code=response.content,
+            status=TaskStatus.EVALUATING,
+            generated_code=strip_markdown_code_blocks(response.content),
         )
+
+def strip_markdown_code_blocks(text: str) -> str:
+    """Remove markdown code blocks from LLM response."""
+    import re
+    # Match ```python ... ``` or ``` ... ```
+    pattern = r'```(?:python)?\n?(.*?)```'
+    matches = re.findall(pattern, text, re.DOTALL)
+    if matches:
+        return matches[0].strip()
+    return text.strip()

@@ -6,7 +6,7 @@ Uses an LLM to identify what type of coding task the user is requesting.
 
 from app.core.base_llm import BaseLLMClient
 from app.core.task_state import TaskState, TaskType
-from app.routers.prompts import (
+from app.classifier.prompts import (
     IDENTIFIER_SYSTEM_PROMPT,
     IDENTIFIER_TEMPLATE,
     CAN_HANDLE_TEMPLATE,

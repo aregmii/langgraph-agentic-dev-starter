@@ -11,7 +11,7 @@ from langgraph.graph import StateGraph, END
 
 from app.core.task_state import TaskState, TaskStatus
 from app.core.base_llm import BaseLLMClient
-from app.routers.task_identifier import TaskIdentifier
+from app.classifier.task_identifier import TaskIdentifier
 from app.executors.code_executor import CodeExecutor
 from app.evaluators.syntax_evaluator import SyntaxEvaluator
 

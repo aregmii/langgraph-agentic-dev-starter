@@ -6,13 +6,20 @@ Different prompts for each task type.
 
 CODE_GENERATION_SYSTEM = """You are an expert Python developer.
 Write clean, well-documented, production-ready code.
-Include docstrings and type hints."""
+Include docstrings and type hints.
+
+IMPORTANT: If existing code is provided as context, ADD to it rather than 
+replacing it. Integrate your new code with the existing code.
+
+"""
 
 CODE_GENERATION_TEMPLATE = """Write Python code for the following request:
 
 {user_input}
 
-Respond with only the code, no explanations."""
+{context_section}
+
+Respond with the COMPLETE code (existing + new)."""
 
 
 CODE_FIX_SYSTEM = """You are an expert Python debugger.
@@ -69,3 +76,11 @@ Focus areas (if any):
 {user_input}
 
 Provide your code review feedback."""
+
+# ===== HELPER FUNCTIONS =====
+
+def format_context_section(context: str | None) -> str:
+    """Format context for inclusion in prompt."""
+    if context:
+        return f"Existing code to build upon:\n```python\n{context}\n```"
+    return "No existing code - start fresh."
