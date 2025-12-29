@@ -15,6 +15,14 @@ from app.classifier.task_identifier import TaskIdentifier
 from app.executors.code_executor import CodeExecutor
 from app.evaluators.syntax_evaluator import SyntaxEvaluator
 
+from app.logging_utils import (
+    log_node_start,
+    log_node_complete,
+    log_workflow_complete,
+    log_retry,
+    log_error,
+)
+
 
 def create_code_agent(
     identifier_llm: BaseLLMClient,
@@ -40,51 +48,66 @@ def create_code_agent(
     
     async def identify_node(state: TaskState) -> TaskState:
         """Identify the task type."""
+        log_node_start(state.task_id, "identify", f"Analyzing: '{state.input_description[:50]}...'")
+
         # Mark that we're starting identification
         state = state.with_updates(status=TaskStatus.IDENTIFYING)
-        
+
         # Check if we can handle this at all
         if not await identifier.can_handle(state):
+            log_node_complete(state.task_id, "identify", "Not a coding task", "failed")
             return state.with_updates(
                 status=TaskStatus.FAILED,
                 error_message="Not a coding task - cannot handle"
             )
-        
+
         # Identify the task type
         task_type = await identifier.identify(state)
-        
+
+        log_node_complete(state.task_id, "identify", f"Task type: {task_type.value}")
         return state.with_updates(task_type=task_type)
     
     async def execute_node(state: TaskState) -> TaskState:
         """Generate code using the LLM."""
+        log_node_start(state.task_id, "execute", f"Generating code for {state.task_type.value}...")
+
         # Mark that we're starting execution
         state = state.with_updates(status=TaskStatus.EXECUTING)
-        
+
         # Execute and return updated state
-        return await executor.execute(state)
+        result = await executor.execute(state)
+        log_node_complete(state.task_id, "execute", f"Generated {len(result.generated_code or '')} chars")
+        return result
     
     async def evaluate_node(state: TaskState) -> TaskState:
         """Check if generated code is acceptable."""
+        log_node_start(state.task_id, "evaluate", "Validating syntax...")
+
         # Mark that we're starting evaluation
         state = state.with_updates(status=TaskStatus.EVALUATING)
-        
+
         result = await evaluator.evaluate(state)
-        
+
         if result.passed:
+            log_node_complete(state.task_id, "evaluate", f"Passed! Score: {result.score}")
+            log_workflow_complete(state.task_id)
             return state.with_updates(
                 status=TaskStatus.COMPLETED,
                 evaluation_score=result.score,
                 evaluation_feedback=result.feedback
             )
-        
+
         # Failed - can we retry?
         if state.is_retriable():
+            log_retry(state.task_id, state.retry_count + 1, state.max_retries, result.feedback)
             return state.increment_retry().with_updates(
                 evaluation_score=result.score,
                 evaluation_feedback=result.feedback
             )
-        
+
         # No retries left
+        log_error(state.task_id, "evaluate", "Max retries exceeded")
+        log_workflow_complete(state.task_id)
         return state.with_updates(
             status=TaskStatus.FAILED,
             evaluation_score=result.score,
