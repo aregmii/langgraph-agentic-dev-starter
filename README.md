@@ -7,15 +7,21 @@ AI-powered code generation platform demonstrating enterprise agentic AI patterns
 git clone https://github.com/aregmii/langgraph-agentic-dev-starter.git
 cd langgraph-agentic-dev-starter
 
+# Setup Python
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e "./agent-service[dev]"
 echo 'XAI_API_KEY=your-key' > .env
 
+# Terminal 1: Start Python agent-service
 cd agent-service
 USE_MOCK_LLM=true uvicorn app.main:app --reload
 
-# Open http://localhost:8000
+# Terminal 2: Start Java gateway
+cd gateway-service
+./mvnw spring-boot:run
+
+# Open http://localhost:8080
 ```
 
 ## Architecture
@@ -95,8 +101,8 @@ sequenceDiagram
 |---|--------|--------|-------------|
 | 1-5 | Foundation | ✅ | Core interfaces, tools, graph, API, logging |
 | 6 | SSE Streaming | ✅ | Real-time progress events |
-| 7 | Code Execution | 🔜 | Run generated code in UI |
-| 8 | Java Gateway | 📋 | Serve UI, proxy to Python |
+| 7 | Code Execution | ✅ | Run generated code in UI |
+| 8 | Java Gateway | ✅ | Serve UI, proxy to Python |
 | 9 | Auth & Rate Limiting | 📋 | JWT, Bucket4j |
 | 10 | Circuit Breaker | 📋 | Resilience4j |
 | 11 | Planner Agent | 📋 | Task decomposition |
@@ -117,7 +123,11 @@ langgraph-agentic-dev-starter/
 │       ├── api/             # Routes, SSE events
 │       ├── llm/             # Grok + Mock clients
 │       └── tools/           # Syntax checker, code runner
-├── gateway-service/         # Java/Spring Boot (planned)
+├── gateway-service/         # Java/Spring Boot
+│   └── src/main/java/com/codeagent/gateway/
+│       ├── controller/      # TaskController (proxy)
+│       ├── filter/          # Auth, RateLimit filters
+│       └── config/          # Resilience config
 └── web-ui/                  # Browser interface
 ```
 
