@@ -13,6 +13,7 @@ from typing import Optional
 
 from app.core.task_state import TaskState
 from app.logging_utils import log_request_start, log_request_complete, log_request_failed
+from app.tools.code_executor import CodeExecutor
 
 from fastapi.responses import StreamingResponse
 
@@ -136,3 +137,40 @@ async def get_task(task_id: str) -> TaskResponse:
         raise HTTPException(status_code=404, detail="Task not found")
 
     return TaskResponse.from_state(tasks[task_id])
+
+
+# ===== CODE EXECUTION =====
+
+# Initialize code executor
+code_executor = CodeExecutor()
+
+
+class ExecuteRequest(BaseModel):
+    """Request to execute Python code."""
+    code: str
+
+
+class ExecuteResponse(BaseModel):
+    """Response from code execution."""
+    success: bool
+    output: str
+    error: str | None = None
+    execution_time_ms: float
+
+
+@router.post("/execute", response_model=ExecuteResponse)
+async def execute_code(request: ExecuteRequest):
+    """Execute Python code and return output."""
+    import time
+    start = time.time()
+
+    result = await code_executor.execute(request.code)
+
+    execution_time = (time.time() - start) * 1000
+
+    return ExecuteResponse(
+        success=result.success,
+        output=result.output or "(No output)",
+        error=result.error_message if not result.success else None,
+        execution_time_ms=round(execution_time, 1)
+    )

@@ -27,6 +27,21 @@
         .metric { text-align: center; }
         .metric-value { font-size: 24px; font-weight: bold; color: #4fc3f7; }
         .metric-label { font-size: 12px; color: #888; }
+        #output {
+            background: #1a1a1a;
+            padding: 15px;
+            border-radius: 8px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            margin-top: 10px;
+            border: 1px solid #444;
+            min-height: 50px;
+        }
+        .btn-run-code { background: #2d5a2d; color: white; }
+        .btn-run-code:hover { background: #3d6a3d; }
+        .output-success { color: #4fc3f7; }
+        .output-error { color: #f44336; }
+        .output-time { color: #888; font-size: 12px; margin-top: 5px; }
     </style>
 </head>
 <body>
@@ -64,6 +79,11 @@
 
         <h3>Generated Code:</h3>
         <pre id="code">Waiting for result...</pre>
+        <button class="btn-run-code" onclick="runCode()">▶ Run Code</button>
+
+        <h3>Output:</h3>
+        <div id="output">Click "Run Code" to execute the generated code...</div>
+        <div id="output-time" class="output-time"></div>
     </div>
 
     <script>
@@ -141,6 +161,46 @@
                 eventsDiv.innerHTML += `<div class="event error">❌ Connection Error: ${err.message}</div>`;
                 setStatus('error', 'Connection Error');
             }
+        }
+
+        async function runCode() {
+            const code = document.getElementById('code').textContent;
+            if (code === 'Waiting for result...' || !code.trim()) {
+                document.getElementById('output').innerHTML = '<span class="output-error">No code to run. Generate code first.</span>';
+                document.getElementById('output-time').textContent = '';
+                return;
+            }
+
+            document.getElementById('output').textContent = 'Running...';
+            document.getElementById('output-time').textContent = '';
+
+            try {
+                const response = await fetch('/tasks/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code })
+                });
+
+                const result = await response.json();
+                const outputDiv = document.getElementById('output');
+                const timeDiv = document.getElementById('output-time');
+
+                if (result.success) {
+                    outputDiv.innerHTML = '<span class="output-success">' + escapeHtml(result.output) + '</span>';
+                } else {
+                    outputDiv.innerHTML = '<span class="output-error">' + escapeHtml(result.error || result.output) + '</span>';
+                }
+                timeDiv.textContent = 'Execution time: ' + result.execution_time_ms + 'ms';
+            } catch (err) {
+                document.getElementById('output').innerHTML = '<span class="output-error">Error: ' + escapeHtml(err.message) + '</span>';
+                document.getElementById('output-time').textContent = '';
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
     </script>
 </body>
