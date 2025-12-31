@@ -3,12 +3,16 @@ package com.codeagent.gateway.controller;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import reactor.core.publisher.Flux;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
@@ -31,21 +35,42 @@ public class TaskController {
 
     /**
      * Create a new task - proxies to Python and streams SSE response.
+     * Passes through raw SSE stream to preserve formatting.
      */
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<String> createTask(@RequestBody Map<String, Object> request) {
+    public ResponseEntity<StreamingResponseBody> createTask(@RequestBody Map<String, Object> request) {
         String description = (String) request.getOrDefault("description", "");
         log.info("[Gateway] Received task: '{}'", truncate(description, 50));
 
-        return webClient.post()
-                .uri("/tasks")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(request)
-                .retrieve()
-                .bodyToFlux(String.class)
-                .doOnNext(event -> log.debug("[Gateway] Streaming: {}", truncate(event, 80)))
-                .doOnComplete(() -> log.info("[Gateway] Stream completed"))
-                .doOnError(e -> log.error("[Gateway] Stream error: {}", e.getMessage()));
+        StreamingResponseBody stream = outputStream -> {
+            Flux<DataBuffer> dataBufferFlux = webClient.post()
+                    .uri("/tasks")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(request)
+                    .retrieve()
+                    .bodyToFlux(DataBuffer.class);
+
+            dataBufferFlux.doOnNext(dataBuffer -> {
+                try {
+                    byte[] bytes = new byte[dataBuffer.readableByteCount()];
+                    dataBuffer.read(bytes);
+                    DataBufferUtils.release(dataBuffer);
+                    outputStream.write(bytes);
+                    outputStream.flush();
+                    log.debug("[Gateway] Streaming: {}", truncate(new String(bytes, StandardCharsets.UTF_8), 80));
+                } catch (Exception e) {
+                    log.error("[Gateway] Stream write error: {}", e.getMessage());
+                }
+            }).doOnComplete(() -> {
+                log.info("[Gateway] Stream completed");
+            }).doOnError(e -> {
+                log.error("[Gateway] Stream error: {}", e.getMessage());
+            }).blockLast();
+        };
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_EVENT_STREAM)
+                .body(stream);
     }
 
     /**
