@@ -21,17 +21,7 @@ app.include_router(tasks_router)
 app.include_router(health_router)
 
 
-@app.get("/")
-async def root():
-    """Root endpoint - basic service info."""
-    return {
-        "service": "code-agent",
-        "version": "0.1.0",
-        "docs": "/docs",
-    }
-
-
-# Serve static files (test UI)
-static_path = Path(__file__).parent.parent / "static"
-if static_path.exists():
-    app.mount("/static", StaticFiles(directory=static_path), name="static")
+# Serve web-ui (separate module but served by Python for now)
+web_ui_path = Path(__file__).parent.parent.parent / "web-ui"
+if web_ui_path.exists():
+    app.mount("/", StaticFiles(directory=web_ui_path, html=True), name="web-ui")

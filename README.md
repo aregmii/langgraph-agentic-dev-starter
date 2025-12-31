@@ -1,103 +1,129 @@
-# LangGraph Agentic Code Assistant
+# Code Agent Platform
 
-AI-powered code generation agent with real-time SSE streaming.
+AI-powered code generation platform demonstrating enterprise agentic AI patterns.
 
-## 🎯 Features
-
-- **Real-time progress** via Server-Sent Events (SSE)
-- **Code generation** using Grok LLM
-- **Syntax validation** via AST parsing
-- **Mock mode** for free development/testing
-- **Request tracing** with unique IDs for concurrent requests
-
-## 🏗️ Architecture
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant FastAPI
-    participant CodeAgent
-    participant LLM
-
-    Client->>FastAPI: POST /tasks
-    FastAPI->>CodeAgent: initiate_task()
-
-    CodeAgent-->>Client: SSE: node_start (identify)
-    CodeAgent->>LLM: classify task
-    LLM-->>CodeAgent: CODE_GENERATION
-    CodeAgent-->>Client: SSE: node_complete (identify)
-
-    CodeAgent-->>Client: SSE: node_start (execute)
-    CodeAgent->>LLM: generate code
-    LLM-->>CodeAgent: def fibonacci()...
-    CodeAgent-->>Client: SSE: node_complete (execute)
-
-    CodeAgent-->>Client: SSE: node_start (evaluate)
-    CodeAgent->>CodeAgent: AST parse
-    CodeAgent-->>Client: SSE: node_complete (evaluate)
-
-    CodeAgent-->>Client: SSE: result
-```
-
-## 🚀 Quick Start
-
+## Quick Start
 ```bash
-# Setup
 git clone https://github.com/aregmii/langgraph-agentic-dev-starter.git
 cd langgraph-agentic-dev-starter
+
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e "./agent-service[dev]"
 echo 'XAI_API_KEY=your-key' > .env
 
-# Run (mock mode - free)
 cd agent-service
 USE_MOCK_LLM=true uvicorn app.main:app --reload
 
-# Open browser
-open http://localhost:8000/static/test-sse.html
+# Open http://localhost:8000
 ```
 
-## 🧪 Mock vs Real Mode
+## Architecture
+```mermaid
+sequenceDiagram
+    participant User
+    participant Java as Java Gateway :8080
+    participant Python as Python Server :8000
+    participant Supervisor
+    participant Planner
+    participant Coder
+    participant Validator
+    participant DocWriter
+
+    User->>Java: Open webpage
+    Java-->>User: Serve index.html
+
+    User->>Java: POST /api/tasks "Add sorting"
+    Java->>Python: POST /tasks (proxy)
+
+    Python->>Supervisor: initiate_task()
+
+    Note over User: SSE stream starts
+
+    Supervisor-->>User: SSE: supervisor started
+
+    Supervisor->>Planner: What steps needed?
+    Supervisor-->>User: SSE: planner started
+    Planner-->>Supervisor: [1. Write code, 2. Validate, 3. Add docs]
+    Supervisor-->>User: SSE: planner done
+
+    Supervisor->>Coder: Generate code
+    Supervisor-->>User: SSE: coder started
+    Coder-->>Supervisor: def sort_list(): ...
+    Supervisor-->>User: SSE: coder done
+
+    Supervisor->>Validator: Check code
+    Supervisor-->>User: SSE: validator started
+
+    alt Errors found (Reflection)
+        Validator-->>Supervisor: Syntax error
+        Supervisor-->>User: SSE: validation failed, retrying
+        Supervisor->>Coder: Fix error
+        Coder-->>Supervisor: Fixed code
+    end
+
+    Validator-->>Supervisor: ✓ Valid
+    Supervisor-->>User: SSE: validator done
+
+    Supervisor->>DocWriter: Add documentation
+    Supervisor-->>User: SSE: docwriter started
+    DocWriter-->>Supervisor: Code with docstrings
+    Supervisor-->>User: SSE: docwriter done
+
+    Supervisor-->>User: SSE: result (final code)
+```
+
+## Agentic Design Patterns
+
+| Pattern | Implementation | Status |
+|---------|----------------|--------|
+| **Prompt Chaining** | Identify → Execute → Evaluate | ✅ Done |
+| **Structured Output** | TaskState dataclass | ✅ Done |
+| **Routing** | LLM-based task classification | ✅ Done |
+| **Reflection** | Validator → Coder error loop | ✅ Done |
+| **Streaming** | SSE real-time events | ✅ Done |
+| **Planning** | Planner Agent decomposes tasks | 📋 Planned |
+| **Multi-Agent** | Supervisor orchestrates specialists | 📋 Planned |
+| **Tool Use** | LLM selects tools dynamically | 📋 Planned |
+| **Memory** | Short-term + long-term store | 📋 Planned |
+| **Guardrails** | Input/output validation | 📋 Planned |
+| **RAG** | Doc Agent with embeddings | 📋 Planned |
+
+## Module Roadmap
+
+| # | Module | Status | Description |
+|---|--------|--------|-------------|
+| 1-5 | Foundation | ✅ | Core interfaces, tools, graph, API, logging |
+| 6 | SSE Streaming | ✅ | Real-time progress events |
+| 7 | Code Execution | 🔜 | Run generated code in UI |
+| 8 | Java Gateway | 📋 | Serve UI, proxy to Python |
+| 9 | Auth & Rate Limiting | 📋 | JWT, Bucket4j |
+| 10 | Circuit Breaker | 📋 | Resilience4j |
+| 11 | Planner Agent | 📋 | Task decomposition |
+| 12 | Multi-Agent Supervisor | 📋 | Orchestrate specialists |
+| 13 | Memory Store | 📋 | Context persistence |
+| 14 | Tool Registry | 📋 | Dynamic tool selection |
+| 15 | RAG / Doc Agent | 📋 | Documentation lookup |
+| 16 | Guardrails | 📋 | Safety validation |
+| 17 | Prometheus Metrics | 📋 | Observability |
+| 18 | Docker / K8s | 📋 | Containerization |
+
+## Project Structure
+```
+langgraph-agentic-dev-starter/
+├── agent-service/           # Python/FastAPI
+│   └── app/
+│       ├── agents/          # CodeAgent, TaskExecution
+│       ├── api/             # Routes, SSE events
+│       ├── llm/             # Grok + Mock clients
+│       └── tools/           # Syntax checker, code runner
+├── gateway-service/         # Java/Spring Boot (planned)
+└── web-ui/                  # Browser interface
+```
+
+## Mock vs Real Mode
 
 | Mode | Command | Speed | Cost |
 |------|---------|-------|------|
 | Mock | `USE_MOCK_LLM=true uvicorn ...` | ~300ms | Free |
 | Real | `uvicorn ...` | ~12,000ms | API credits |
-
-## 📊 Module Progress
-
-| Module | Status | Description |
-|--------|--------|-------------|
-| 0-5 | ✅ | Foundation, Core, Tools, Graph, API, Logging |
-| 6: SSE Streaming | ✅ | Real-time progress events |
-| 7: Code Execution | 🔜 | Run generated code in UI |
-| 8+: Error Handling, RAG, Multi-Agent | 📋 | Planned |
-
-## 📝 Server Logs
-
-Every log line has request ID for concurrent request tracing:
-
-```
-[req-e2056620] ══════════════════════════════════════════════════════════════════
-[req-e2056620] 🆕 NEW REQUEST
-[req-e2056620] 📝 Task: "Write a fibonacci function"
-[req-e2056620] 🤖 Mode: REAL (using Grok API)
-[req-e2056620]
-[req-e2056620] → [CodeAgent] Classifying task type using LLM...
-[req-e2056620] ✓ Done (978ms) → Task type: code_generation
-[req-e2056620]
-[req-e2056620] → [CodeAgent] Generating code using LLM...
-[req-e2056620] ✓ Done (11364ms) → Generated 3308 chars
-[req-e2056620]
-[req-e2056620] → [CodeAgent] Validating syntax using AST parser...
-[req-e2056620] ✓ Done (2ms) → Passed! Score: 1.0
-[req-e2056620]
-[req-e2056620] ══════════════════════════════════════════════════════════════════
-[req-e2056620] ✅ COMPLETE | 12344ms total | 3308 chars generated
-[req-e2056620] ══════════════════════════════════════════════════════════════════
-```
-
-## 📄 License
-
-MIT
