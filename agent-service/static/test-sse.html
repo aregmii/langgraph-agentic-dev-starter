@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SSE Test - Code Agent</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+        .container { max-width: 900px; margin: 0 auto; }
+        #events { background: #2d2d2d; padding: 15px; border-radius: 8px; max-height: 300px; overflow-y: auto; margin: 15px 0; }
+        .event { margin: 8px 0; padding: 8px; border-radius: 4px; }
+        .node_start { background: #264f78; }
+        .node_complete { background: #2d5a2d; }
+        .result { background: #4a4a2d; }
+        .error { background: #5a2d2d; }
+        .retry { background: #5a4a2d; }
+        button { padding: 10px 20px; font-size: 16px; margin: 10px 5px 10px 0; cursor: pointer; border: none; border-radius: 4px; }
+        button:hover { opacity: 0.8; }
+        .btn-run { background: #0e639c; color: white; }
+        .btn-clear { background: #5a5a5a; color: white; }
+        #code { background: #2d2d2d; padding: 15px; border-radius: 8px; white-space: pre-wrap; overflow-x: auto; }
+        input { padding: 10px; width: 500px; font-size: 14px; border-radius: 4px; border: 1px solid #555; background: #2d2d2d; color: #d4d4d4; }
+        .status { padding: 5px 10px; border-radius: 4px; display: inline-block; margin-left: 10px; }
+        .status.idle { background: #5a5a5a; }
+        .status.running { background: #0e639c; }
+        .status.success { background: #2d5a2d; }
+        .status.error { background: #5a2d2d; }
+        .metrics { background: #2d2d2d; padding: 10px 15px; border-radius: 8px; margin: 15px 0; display: flex; gap: 20px; }
+        .metric { text-align: center; }
+        .metric-value { font-size: 24px; font-weight: bold; color: #4fc3f7; }
+        .metric-label { font-size: 12px; color: #888; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Code Agent - SSE Test</h1>
+
+        <div>
+            <input type="text" id="description" value="Write a Python function to calculate fibonacci numbers" placeholder="Describe your task...">
+            <button class="btn-run" onclick="runTask()">▶ Run Task</button>
+            <button class="btn-clear" onclick="clearEvents()">Clear</button>
+            <span id="status" class="status idle">Idle</span>
+        </div>
+
+        <div class="metrics">
+            <div class="metric">
+                <div class="metric-value" id="totalTime">-</div>
+                <div class="metric-label">Total Time (ms)</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value" id="identifyTime">-</div>
+                <div class="metric-label">Identify (ms)</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value" id="executeTime">-</div>
+                <div class="metric-label">Execute (ms)</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value" id="evaluateTime">-</div>
+                <div class="metric-label">Evaluate (ms)</div>
+            </div>
+        </div>
+
+        <h3>Events:</h3>
+        <div id="events"><div class="event">Ready. Click "Run Task" to start.</div></div>
+
+        <h3>Generated Code:</h3>
+        <pre id="code">Waiting for result...</pre>
+    </div>
+
+    <script>
+        function setStatus(status, text) {
+            const el = document.getElementById('status');
+            el.className = 'status ' + status;
+            el.textContent = text;
+        }
+
+        function clearEvents() {
+            document.getElementById('events').innerHTML = '<div class="event">Ready. Click "Run Task" to start.</div>';
+            document.getElementById('code').textContent = 'Waiting for result...';
+            document.getElementById('totalTime').textContent = '-';
+            document.getElementById('identifyTime').textContent = '-';
+            document.getElementById('executeTime').textContent = '-';
+            document.getElementById('evaluateTime').textContent = '-';
+            setStatus('idle', 'Idle');
+        }
+
+        async function runTask() {
+            const description = document.getElementById('description').value;
+            const eventsDiv = document.getElementById('events');
+            eventsDiv.innerHTML = '';
+            setStatus('running', 'Running...');
+
+            try {
+                const response = await fetch('/tasks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const text = decoder.decode(value);
+                    const lines = text.split('\n').filter(l => l.startsWith('data: '));
+
+                    for (const line of lines) {
+                        const json = JSON.parse(line.slice(6));
+                        const eventDiv = document.createElement('div');
+                        eventDiv.className = 'event ' + json.event;
+
+                        const time = new Date(json.timestamp).toLocaleTimeString();
+
+                        if (json.event === 'node_start') {
+                            eventDiv.textContent = `${time} 🔵 ${json.node.toUpperCase()} - ${json.message}`;
+                        } else if (json.event === 'node_complete') {
+                            eventDiv.textContent = `${time} ✅ ${json.node.toUpperCase()} - ${json.message} (${json.duration_ms.toFixed(0)}ms)`;
+                            // Update metrics
+                            const metricId = json.node + 'Time';
+                            const metricEl = document.getElementById(metricId);
+                            if (metricEl) metricEl.textContent = json.duration_ms.toFixed(0);
+                        } else if (json.event === 'retry') {
+                            eventDiv.textContent = `${time} 🔄 RETRY ${json.attempt}/${json.max_attempts} - ${json.reason}`;
+                        } else if (json.event === 'result') {
+                            eventDiv.textContent = `${time} 🎉 COMPLETE - ${json.status} (${json.total_duration_ms.toFixed(0)}ms total)`;
+                            document.getElementById('code').textContent = json.generated_code || 'No code generated';
+                            document.getElementById('totalTime').textContent = json.total_duration_ms.toFixed(0);
+                            setStatus(json.status === 'completed' ? 'success' : 'error', json.status.toUpperCase());
+                        } else if (json.event === 'error') {
+                            eventDiv.textContent = `${time} ❌ ERROR - ${json.error}`;
+                            setStatus('error', 'Error');
+                        }
+
+                        eventsDiv.appendChild(eventDiv);
+                        eventsDiv.scrollTop = eventsDiv.scrollHeight;
+                    }
+                }
+            } catch (err) {
+                eventsDiv.innerHTML += `<div class="event error">❌ Connection Error: ${err.message}</div>`;
+                setStatus('error', 'Connection Error');
+            }
+        }
+    </script>
+</body>
+</html>

@@ -11,13 +11,19 @@ from app.core.base_llm import BaseLLMClient, LLMResponse
 from pathlib import Path
 
 def load_env():
+    """Load .env file, OVERRIDING any existing environment variables."""
     env_path = Path(__file__).parent.parent.parent.parent / ".env"
+    
     if env_path.exists():
         with open(env_path) as f:
             for line in f:
+                line = line.strip()
                 if "=" in line and not line.startswith("#"):
-                    key, value = line.strip().split("=", 1)
-                    os.environ.setdefault(key, value)
+                    key, value = line.split("=", 1)
+                    # Remove quotes if present
+                    value = value.strip().strip('"').strip("'")
+                    # OVERRIDE existing value (not setdefault!)
+                    os.environ[key] = value
 
 load_env()
 

@@ -6,13 +6,13 @@ REST endpoints for the code agent:
 - GET /tasks/{task_id} - Get task status and result
 """
 
-from uuid import uuid4
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
-from app.core.task_state import TaskState, TaskType, TaskStatus
+from app.core.task_state import TaskState
 
+from fastapi.responses import StreamingResponse
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -23,7 +23,7 @@ class TaskRequest(BaseModel):
     """Request body for creating a new task."""
     description: str
     context: Optional[str] = None
-    
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -42,7 +42,7 @@ class TaskResponse(BaseModel):
     evaluation_score: Optional[float] = None
     evaluation_feedback: Optional[str] = None
     error_message: Optional[str] = None
-    
+
     @classmethod
     def from_state(cls, state: TaskState) -> "TaskResponse":
         """Convert TaskState to API response."""
@@ -64,44 +64,41 @@ tasks: dict[str, TaskState] = {}
 
 # ===== ENDPOINTS =====
 
-@router.post("", response_model=TaskResponse)
-async def create_task(request: TaskRequest) -> TaskResponse:
+@router.post("", response_class=StreamingResponse)
+async def create_task(request: TaskRequest):
     """
     Create and execute a coding task.
-    
-    For now, runs synchronously. Module 5 adds async Redis queue.
+
+    Returns Server-Sent Events (SSE) showing real-time progress.
     """
-    from app.agents.code_agent import create_code_agent
-    from app.llm.grok_client import GrokClient
-    
-    # Create initial state
-    task_id = str(uuid4())
-    state = TaskState(
-        task_id=task_id,
-        task_type=TaskType.CODE_GENERATION,  # Overwritten by identifier
-        input_description=request.description,
-        context=request.context,
-    )
-    
-    # Create and run agent
-    llm_client = GrokClient()
-    agent = create_code_agent(
+    from app.agents.code_agent import CodeAgent
+    from app.llm import get_llm_client
+
+    llm_client = get_llm_client()
+    agent = CodeAgent(
         identifier_llm=llm_client,
         executor_llm=llm_client,
     )
-    
-    # Run the workflow
-    result = await agent.ainvoke(state)
 
-    if isinstance(result, dict):
-        final_state = TaskState(**result)
-    else:
-        final_state = result
-    
-    # Store result
-    tasks[task_id] = final_state
-    
-    return TaskResponse.from_state(final_state)
+    execution = agent.initiate_task(request.description, request.context)
+
+    # Store for GET endpoint
+    tasks[execution.task_id] = execution.state
+
+    async def event_generator():
+        async for event in execution.progress():
+            yield event.to_sse()
+        # Update stored state after completion
+        tasks[execution.task_id] = execution.state
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
@@ -109,5 +106,5 @@ async def get_task(task_id: str) -> TaskResponse:
     """Get the status and result of a task."""
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
-    
+
     return TaskResponse.from_state(tasks[task_id])

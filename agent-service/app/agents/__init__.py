@@ -1,5 +1,6 @@
-"""Agent workflows."""
+"""Agent implementations."""
 
-from app.agents.code_agent import create_code_agent
+from app.agents.code_agent import CodeAgent
+from app.agents.task_execution import TaskExecution
 
-__all__ = ["create_code_agent"]
+__all__ = ["CodeAgent", "TaskExecution"]

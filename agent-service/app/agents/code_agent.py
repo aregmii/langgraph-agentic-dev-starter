@@ -1,20 +1,19 @@
 """
-Code Agent Workflow
+Code Agent
 
-LangGraph workflow that:
-1. Identifies the task type
-2. Generates code using appropriate prompt
-3. Evaluates output, retries if needed
+Executes coding tasks with observable progress via TaskExecution.
 """
 
-from langgraph.graph import StateGraph, END
+import asyncio
+import time
+from uuid import uuid4
 
-from app.core.task_state import TaskState, TaskStatus
+from app.core.task_state import TaskState, TaskType, TaskStatus
 from app.core.base_llm import BaseLLMClient
 from app.classifier.task_identifier import TaskIdentifier
 from app.executors.code_executor import CodeExecutor
 from app.evaluators.syntax_evaluator import SyntaxEvaluator
-
+from app.agents.task_execution import TaskExecution
 from app.logging_utils import (
     log_node_start,
     log_node_complete,
@@ -24,147 +23,130 @@ from app.logging_utils import (
 )
 
 
-def create_code_agent(
-    identifier_llm: BaseLLMClient,
-    executor_llm: BaseLLMClient,
-) -> StateGraph:
+class CodeAgent:
     """
-    Create the code agent workflow.
-    
-    Args:
-        identifier_llm: LLM for task identification (can be smaller/cheaper)
-        executor_llm: LLM for code generation (should be powerful)
-        
-    Returns:
-        Compiled workflow ready to execute
+    Agent that executes coding tasks.
+
+    Usage:
+        agent = CodeAgent(llm_client)
+        execution = agent.initiate_task("Write a sort function", None)
+
+        async for event in execution.progress():
+            print(event.to_sse())
     """
-    
-    # Initialize components
-    identifier = TaskIdentifier(identifier_llm)
-    executor = CodeExecutor(executor_llm)
-    evaluator = SyntaxEvaluator()
-    
-    # ===== NODE FUNCTIONS =====
-    
-    async def identify_node(state: TaskState) -> TaskState:
-        """Identify the task type."""
-        log_node_start(state.task_id, "identify", f"Analyzing: '{state.input_description[:50]}...'")
 
-        # Mark that we're starting identification
-        state = state.with_updates(status=TaskStatus.IDENTIFYING)
+    def __init__(self, identifier_llm: BaseLLMClient, executor_llm: BaseLLMClient):
+        self.identifier = TaskIdentifier(identifier_llm)
+        self.executor = CodeExecutor(executor_llm)
+        self.evaluator = SyntaxEvaluator()
 
-        # Check if we can handle this at all
-        if not await identifier.can_handle(state):
-            log_node_complete(state.task_id, "identify", "Not a coding task", "failed")
-            return state.with_updates(
-                status=TaskStatus.FAILED,
-                error_message="Not a coding task - cannot handle"
-            )
+    def initiate_task(self, description: str, context: str | None = None) -> TaskExecution:
+        """
+        Start a task and return the execution handle.
 
-        # Identify the task type
-        task_type = await identifier.identify(state)
-
-        log_node_complete(state.task_id, "identify", f"Task type: {task_type.value}")
-        return state.with_updates(task_type=task_type)
-    
-    async def execute_node(state: TaskState) -> TaskState:
-        """Generate code using the LLM."""
-        log_node_start(state.task_id, "execute", f"Generating code for {state.task_type.value}...")
-
-        # Mark that we're starting execution
-        state = state.with_updates(status=TaskStatus.EXECUTING)
-
-        # Execute and return updated state
-        result = await executor.execute(state)
-        log_node_complete(state.task_id, "execute", f"Generated {len(result.generated_code or '')} chars")
-        return result
-    
-    async def evaluate_node(state: TaskState) -> TaskState:
-        """Check if generated code is acceptable."""
-        log_node_start(state.task_id, "evaluate", "Validating syntax...")
-
-        # Mark that we're starting evaluation
-        state = state.with_updates(status=TaskStatus.EVALUATING)
-
-        result = await evaluator.evaluate(state)
-
-        if result.passed:
-            log_node_complete(state.task_id, "evaluate", f"Passed! Score: {result.score}")
-            log_workflow_complete(state.task_id)
-            return state.with_updates(
-                status=TaskStatus.COMPLETED,
-                evaluation_score=result.score,
-                evaluation_feedback=result.feedback
-            )
-
-        # Failed - can we retry?
-        if state.is_retriable():
-            log_retry(state.task_id, state.retry_count + 1, state.max_retries, result.feedback)
-            return state.increment_retry().with_updates(
-                evaluation_score=result.score,
-                evaluation_feedback=result.feedback
-            )
-
-        # No retries left
-        log_error(state.task_id, "evaluate", "Max retries exceeded")
-        log_workflow_complete(state.task_id)
-        return state.with_updates(
-            status=TaskStatus.FAILED,
-            evaluation_score=result.score,
-            evaluation_feedback=result.feedback,
-            error_message="Max retries exceeded"
+        The task runs in the background. Use execution.progress() to get events.
+        """
+        task_id = str(uuid4())
+        state = TaskState(
+            task_id=task_id,
+            task_type=TaskType.CODE_GENERATION,  # Will be overwritten
+            input_description=description,
+            context=context,
         )
-    
-    # ===== EDGE FUNCTIONS =====
-    # These return a STRING that maps to the next node
-    
-    def after_identify(state: TaskState) -> str:
-        """After identification, go to execute or end."""
-        if state.status == TaskStatus.FAILED:
-            return "end"
-        return "execute"
-    
-    def after_evaluate(state: TaskState) -> str:
-        """After evaluation, retry, complete, or fail."""
-        if state.status == TaskStatus.COMPLETED:
-            return "end"
-        if state.status == TaskStatus.FAILED:
-            return "end"
-        if state.status == TaskStatus.RETRYING:
-            return "execute"
-        return "end"
-    
-    # ===== BUILD THE WORKFLOW =====
-    
-    workflow = StateGraph(TaskState)
-    
-    # Register the nodes
-    workflow.add_node("identify", identify_node)
-    workflow.add_node("execute", execute_node)
-    workflow.add_node("evaluate", evaluate_node)
-    
-    # Start at identify
-    workflow.set_entry_point("identify")
-    
-    # After identify: check after_identify() to decide next step
-    # If returns "execute" → go to execute node
-    # If returns "end" → stop workflow
-    workflow.add_conditional_edges(
-        "identify",
-        after_identify,
-        {"execute": "execute", "end": END}
-    )
-    
-    # After execute: always go to evaluate
-    workflow.add_edge("execute", "evaluate")
-    
-    # After evaluate: check after_evaluate() to decide next step
-    # If returns "execute" → retry (go back to execute)
-    # If returns "end" → stop workflow
-    workflow.add_conditional_edges(
-        "evaluate",
-        after_evaluate,
-        {"execute": "execute", "end": END}
-    )
-    
-    return workflow.compile()
+
+        execution = TaskExecution(task_id, state)
+
+        # Run workflow in background
+        asyncio.create_task(self._run(execution, state))
+
+        return execution
+
+    async def _run(self, execution: TaskExecution, state: TaskState):
+        """Execute the workflow, updating the execution object."""
+        workflow_start = time.time()
+
+        try:
+            # === IDENTIFY ===
+            execution.start_node("identify", f"Analyzing: '{state.input_description[:50]}...'")
+            log_node_start(state.task_id, "identify", f"Analyzing: '{state.input_description[:50]}...'")
+
+            state = state.with_updates(status=TaskStatus.IDENTIFYING)
+
+            if not await self.identifier.can_handle(state):
+                execution.complete_node("identify", "Not a coding task")
+                log_node_complete(state.task_id, "identify", "Not a coding task", "failed")
+                state = state.with_updates(
+                    status=TaskStatus.FAILED,
+                    error_message="Not a coding task - cannot handle"
+                )
+                execution.complete(state, (time.time() - workflow_start) * 1000)
+                return
+
+            task_type = await self.identifier.identify(state)
+            state = state.with_updates(task_type=task_type)
+
+            execution.complete_node("identify", f"Task type: {task_type.value}")
+            log_node_complete(state.task_id, "identify", f"Task type: {task_type.value}")
+
+            # === EXECUTE (with retry loop) ===
+            max_retries = state.max_retries
+
+            while True:
+                execution.start_node("execute", f"Generating code for {state.task_type.value}...")
+                log_node_start(state.task_id, "execute", f"Generating code for {state.task_type.value}...")
+
+                state = state.with_updates(status=TaskStatus.EXECUTING)
+                state = await self.executor.execute(state)
+
+                execution.complete_node("execute", f"Generated {len(state.generated_code or '')} chars")
+                log_node_complete(state.task_id, "execute", f"Generated {len(state.generated_code or '')} chars")
+
+                # === EVALUATE ===
+                execution.start_node("evaluate", "Validating syntax...")
+                log_node_start(state.task_id, "evaluate", "Validating syntax...")
+
+                state = state.with_updates(status=TaskStatus.EVALUATING)
+                result = await self.evaluator.evaluate(state)
+
+                if result.passed:
+                    state = state.with_updates(
+                        status=TaskStatus.COMPLETED,
+                        evaluation_score=result.score,
+                        evaluation_feedback=result.feedback
+                    )
+                    execution.complete_node("evaluate", f"Passed! Score: {result.score}")
+                    log_node_complete(state.task_id, "evaluate", f"Passed! Score: {result.score}")
+                    break
+
+                # Failed - can we retry?
+                if state.is_retriable():
+                    state = state.increment_retry()
+                    execution.complete_node("evaluate", f"Failed: {result.feedback}")
+                    execution.retry(state.retry_count, max_retries, result.feedback)
+                    log_retry(state.task_id, state.retry_count, max_retries, result.feedback)
+                    # Loop continues to execute again
+                else:
+                    state = state.with_updates(
+                        status=TaskStatus.FAILED,
+                        evaluation_score=result.score,
+                        evaluation_feedback=result.feedback,
+                        error_message="Max retries exceeded"
+                    )
+                    execution.complete_node("evaluate", "Max retries exceeded")
+                    execution.error("evaluate", "Max retries exceeded")
+                    log_error(state.task_id, "evaluate", "Max retries exceeded")
+                    break
+
+            # === COMPLETE ===
+            total_duration = (time.time() - workflow_start) * 1000
+            execution.complete(state, total_duration)
+            log_workflow_complete(state.task_id)
+
+        except Exception as e:
+            execution.error("workflow", str(e))
+            log_error(state.task_id, "workflow", str(e))
+            state = state.with_updates(
+                status=TaskStatus.FAILED,
+                error_message=str(e)
+            )
+            execution.complete(state, (time.time() - workflow_start) * 1000)
