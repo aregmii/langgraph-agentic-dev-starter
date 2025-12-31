@@ -6,11 +6,13 @@ REST endpoints for the code agent:
 - GET /tasks/{task_id} - Get task status and result
 """
 
+import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
 from app.core.task_state import TaskState
+from app.logging_utils import log_request_start, log_request_complete, log_request_failed
 
 from fastapi.responses import StreamingResponse
 
@@ -82,14 +84,40 @@ async def create_task(request: TaskRequest):
 
     execution = agent.initiate_task(request.description, request.context)
 
+    # Log request start
+    mock_mode = os.getenv("USE_MOCK_LLM", "false").lower() == "true"
+    log_request_start(execution.task_id, request.description, request.context, mock_mode)
+
     # Store for GET endpoint
     tasks[execution.task_id] = execution.state
 
     async def event_generator():
+        last_event = None
         async for event in execution.progress():
+            last_event = event
             yield event.to_sse()
-        # Update stored state after completion
-        tasks[execution.task_id] = execution.state
+
+        # Log completion
+        final_state = execution.state
+        total_ms = 0
+        if last_event and hasattr(last_event, 'data') and 'total_duration_ms' in last_event.data:
+            total_ms = last_event.data['total_duration_ms']
+
+        if final_state.status.value == "completed":
+            log_request_complete(
+                execution.task_id,
+                total_ms,
+                final_state.status.value,
+                len(final_state.generated_code or "")
+            )
+        else:
+            log_request_failed(
+                execution.task_id,
+                total_ms,
+                final_state.error_message or "Unknown error"
+            )
+
+        tasks[execution.task_id] = final_state
 
     return StreamingResponse(
         event_generator(),

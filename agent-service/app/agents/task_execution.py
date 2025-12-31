@@ -17,14 +17,21 @@ from app.api.workflow_events import (
     error_event,
     result_event,
 )
+from app.logging_utils import (
+    log_agent_step_start,
+    log_agent_step_complete,
+    log_agent_step_failed,
+    log_retry,
+)
 
 
 class TaskExecution:
     """A running task with observable progress."""
 
-    def __init__(self, task_id: str, state: TaskState):
+    def __init__(self, task_id: str, state: TaskState, agent_name: str = "CodeAgent"):
         self.task_id = task_id
         self.state = state
+        self.agent_name = agent_name
         self.current_node: str | None = None
         self.started_at = datetime.now(timezone.utc)
         self._events: Queue[WorkflowEvent | None] = Queue()
@@ -37,6 +44,7 @@ class TaskExecution:
         self.current_node = node_name
         self._node_start_time = time.time()
         self._events.put_nowait(node_start_event(node_name, message))
+        log_agent_step_start(self.task_id, self.agent_name, node_name)
 
     def complete_node(self, node_name: str, message: str):
         """Called when a node completes."""
@@ -44,16 +52,19 @@ class TaskExecution:
         if self._node_start_time:
             duration_ms = (time.time() - self._node_start_time) * 1000
         self._events.put_nowait(node_complete_event(node_name, message, duration_ms))
+        log_agent_step_complete(self.task_id, duration_ms, message)
         self.current_node = None
         self._node_start_time = None
 
     def retry(self, attempt: int, max_attempts: int, reason: str):
         """Called when a retry occurs."""
         self._events.put_nowait(retry_event(attempt, max_attempts, reason))
+        log_retry(self.task_id, self.agent_name, attempt, max_attempts, reason)
 
     def error(self, node_name: str, error_msg: str):
         """Called when an error occurs."""
         self._events.put_nowait(error_event(node_name, error_msg))
+        log_agent_step_failed(self.task_id, 0, error_msg)
 
     def complete(self, final_state: TaskState, total_duration_ms: float):
         """Called when workflow finishes."""
