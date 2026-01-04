@@ -7,6 +7,9 @@ agent-service:
 spring:
   application:
     name: gateway-service
+  mvc:
+    async:
+      request-timeout: 300000  # 5 minutes for slow LLM responses
 
 management:
   endpoints:

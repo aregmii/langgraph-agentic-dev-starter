@@ -17,6 +17,11 @@ class WorkflowEventType(str, Enum):
     RETRY = "retry"
     ERROR = "error"
     RESULT = "result"
+    # Planner agent events
+    PLAN_START = "plan_start"
+    PLAN_ANALYSIS = "plan_analysis"
+    PLAN_STEP_IDENTIFIED = "plan_step_identified"
+    PLAN_COMPLETE = "plan_complete"
 
 @dataclass
 class WorkflowEvent:

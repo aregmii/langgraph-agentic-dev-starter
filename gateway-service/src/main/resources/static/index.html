@@ -2,6 +2,8 @@
 <html>
 <head>
     <title>SSE Test - Code Agent</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>mermaid.initialize({startOnLoad: false, theme: 'dark'});</script>
     <style>
         body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
         .container { max-width: 900px; margin: 0 auto; }
@@ -12,6 +14,10 @@
         .result { background: #4a4a2d; }
         .error { background: #5a2d2d; }
         .retry { background: #5a4a2d; }
+        .plan_start { background: #4a2d5a; }
+        .plan_analysis { background: #3d4a5a; }
+        .plan_step_identified { background: #2d4a4a; }
+        .plan_complete { background: #2d5a4a; }
         button { padding: 10px 20px; font-size: 16px; margin: 10px 5px 10px 0; cursor: pointer; border: none; border-radius: 4px; }
         button:hover { opacity: 0.8; }
         .btn-run { background: #0e639c; color: white; }
@@ -21,9 +27,10 @@
         .status { padding: 5px 10px; border-radius: 4px; display: inline-block; margin-left: 10px; }
         .status.idle { background: #5a5a5a; }
         .status.running { background: #0e639c; }
+        .status.planning { background: #4a2d5a; }
         .status.success { background: #2d5a2d; }
         .status.error { background: #5a2d2d; }
-        .metrics { background: #2d2d2d; padding: 10px 15px; border-radius: 8px; margin: 15px 0; display: flex; gap: 20px; }
+        .metrics { background: #2d2d2d; padding: 10px 15px; border-radius: 8px; margin: 15px 0; display: flex; gap: 20px; flex-wrap: wrap; }
         .metric { text-align: center; }
         .metric-value { font-size: 24px; font-weight: bold; color: #4fc3f7; }
         .metric-label { font-size: 12px; color: #888; }
@@ -42,6 +49,24 @@
         .output-success { color: #4fc3f7; }
         .output-error { color: #f44336; }
         .output-time { color: #888; font-size: 12px; margin-top: 5px; }
+        #plan-section {
+            margin: 20px 0;
+            padding: 15px;
+            background: #252530;
+            border-radius: 8px;
+            border: 1px solid #444;
+            display: none;
+        }
+        #plan-section h3 { margin-top: 0; color: #b39ddb; }
+        #plan-info { margin-bottom: 10px; color: #aaa; }
+        #plan-diagram {
+            margin-top: 15px;
+            overflow-x: auto;
+            background: #1e1e1e;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        .mermaid { background: transparent; }
     </style>
 </head>
 <body>
@@ -61,6 +86,10 @@
                 <div class="metric-label">Total Time (ms)</div>
             </div>
             <div class="metric">
+                <div class="metric-value" id="planSteps">-</div>
+                <div class="metric-label">Plan Steps</div>
+            </div>
+            <div class="metric">
                 <div class="metric-value" id="identifyTime">-</div>
                 <div class="metric-label">Identify (ms)</div>
             </div>
@@ -72,6 +101,12 @@
                 <div class="metric-value" id="evaluateTime">-</div>
                 <div class="metric-label">Evaluate (ms)</div>
             </div>
+        </div>
+
+        <div id="plan-section">
+            <h3>📋 Execution Plan</h3>
+            <div id="plan-info"></div>
+            <div id="plan-diagram"></div>
         </div>
 
         <h3>Events:</h3>
@@ -97,9 +132,13 @@
             document.getElementById('events').innerHTML = '<div class="event">Ready. Click "Run Task" to start.</div>';
             document.getElementById('code').textContent = 'Waiting for result...';
             document.getElementById('totalTime').textContent = '-';
+            document.getElementById('planSteps').textContent = '-';
             document.getElementById('identifyTime').textContent = '-';
             document.getElementById('executeTime').textContent = '-';
             document.getElementById('evaluateTime').textContent = '-';
+            document.getElementById('plan-section').style.display = 'none';
+            document.getElementById('plan-info').innerHTML = '';
+            document.getElementById('plan-diagram').innerHTML = '';
             setStatus('idle', 'Idle');
         }
 
@@ -107,7 +146,11 @@
             const description = document.getElementById('description').value;
             const eventsDiv = document.getElementById('events');
             eventsDiv.innerHTML = '';
-            setStatus('running', 'Running...');
+            // Reset plan section
+            document.getElementById('plan-section').style.display = 'none';
+            document.getElementById('plan-info').innerHTML = '';
+            document.getElementById('plan-diagram').innerHTML = '';
+            setStatus('planning', 'Planning...');
 
             try {
                 const response = await fetch('/api/tasks', {
@@ -118,22 +161,74 @@
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
+                let buffer = '';  // Buffer for incomplete SSE messages
 
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
 
-                    const text = decoder.decode(value);
-                    const lines = text.split('\n').filter(l => l.startsWith('data: '));
+                    // Append new data to buffer
+                    buffer += decoder.decode(value, { stream: true });
 
-                    for (const line of lines) {
-                        const json = JSON.parse(line.slice(6));
+                    // Process complete SSE messages (delimited by double newline)
+                    let boundary;
+                    while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+                        const message = buffer.slice(0, boundary);
+                        buffer = buffer.slice(boundary + 2);
+
+                        // Skip empty messages
+                        if (!message.trim()) continue;
+
+                        // Extract JSON after "data: " prefix
+                        // The message should be a single line: "data: {...}"
+                        const dataPrefix = 'data: ';
+                        const dataIndex = message.indexOf(dataPrefix);
+                        if (dataIndex === -1) continue;
+                        const jsonStr = message.slice(dataIndex + dataPrefix.length).trim();
+
+                        let json;
+                        try {
+                            json = JSON.parse(jsonStr);
+                        } catch (e) {
+                            console.error('JSON parse error:', e, 'Data:', jsonStr);
+                            continue;
+                        }
                         const eventDiv = document.createElement('div');
                         eventDiv.className = 'event ' + json.event;
 
                         const time = new Date(json.timestamp).toLocaleTimeString();
 
-                        if (json.event === 'node_start') {
+                        // Handle plan events
+                        if (json.event === 'plan_start') {
+                            document.getElementById('plan-section').style.display = 'block';
+                            document.getElementById('plan-info').innerHTML = `<strong>Task:</strong> ${escapeHtml(json.task)}`;
+                            eventDiv.textContent = `${time} 📋 PLAN START - ${json.task}`;
+                        } else if (json.event === 'plan_analysis') {
+                            const complexity = json.is_complex ? 'Complex' : 'Simple';
+                            document.getElementById('plan-info').innerHTML += `<br><strong>Analysis:</strong> ${complexity} task (${json.word_count} words)`;
+                            eventDiv.textContent = `${time} 🔍 ANALYSIS - ${complexity} task (${json.word_count} words)`;
+                        } else if (json.event === 'plan_step_identified') {
+                            const deps = json.depends_on.length > 0 ? ` [depends: ${json.depends_on.join(', ')}]` : '';
+                            eventDiv.textContent = `${time} 📌 STEP: ${json.step_id} - ${json.task}${deps}`;
+                        } else if (json.event === 'plan_complete') {
+                            document.getElementById('plan-info').innerHTML += `<br><strong>Steps:</strong> ${json.total_steps} | <strong>Parallel stages:</strong> ${json.parallel_stages}`;
+                            document.getElementById('planSteps').textContent = json.total_steps;
+
+                            // Render Mermaid diagram
+                            const diagramDiv = document.getElementById('plan-diagram');
+                            const mermaidId = 'mermaid-' + Date.now();
+                            diagramDiv.innerHTML = `<pre class="mermaid" id="${mermaidId}">${json.mermaid}</pre>`;
+                            try {
+                                mermaid.init(undefined, document.getElementById(mermaidId));
+                            } catch (e) {
+                                console.error('Mermaid error:', e);
+                            }
+
+                            eventDiv.textContent = `${time} ✅ PLAN COMPLETE - ${json.total_steps} steps, ${json.parallel_stages} parallel stages`;
+                            setStatus('running', 'Executing...');
+                        }
+                        // Handle code agent events
+                        else if (json.event === 'node_start') {
                             eventDiv.textContent = `${time} 🔵 ${json.node.toUpperCase()} - ${json.message}`;
                         } else if (json.event === 'node_complete') {
                             eventDiv.textContent = `${time} ✅ ${json.node.toUpperCase()} - ${json.message} (${json.duration_ms.toFixed(0)}ms)`;

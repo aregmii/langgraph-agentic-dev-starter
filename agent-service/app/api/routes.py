@@ -6,6 +6,7 @@ REST endpoints for the code agent:
 - GET /tasks/{task_id} - Get task status and result
 """
 
+import json
 import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -14,6 +15,7 @@ from typing import Optional
 from app.core.task_state import TaskState
 from app.logging_utils import log_request_start, log_request_complete, log_request_failed
 from app.tools.code_executor import CodeExecutor
+from app.agents.planner import PlannerAgent
 
 from fastapi.responses import StreamingResponse
 
@@ -73,6 +75,11 @@ async def create_task(request: TaskRequest):
     Create and execute a coding task.
 
     Returns Server-Sent Events (SSE) showing real-time progress.
+    Flow:
+    1. PlannerAgent analyzes and breaks down task
+    2. SSE events for plan (plan_start, plan_analysis, plan_step_identified, plan_complete)
+    3. CodeAgent executes the task
+    4. SSE events for execution (node_start, node_complete, result)
     """
     from app.agents.code_agent import CodeAgent
     from app.llm import get_llm_client
@@ -92,7 +99,19 @@ async def create_task(request: TaskRequest):
     # Store for GET endpoint
     tasks[execution.task_id] = execution.state
 
+    # Create planner agent
+    planner = PlannerAgent(request_id=execution.task_id)
+
     async def event_generator():
+        # Phase 1: Run planner and emit plan events
+        plan, plan_events = await planner.create_plan(request.description)
+
+        for event_data in plan_events:
+            # Format as SSE
+            json_data = json.dumps(event_data)
+            yield f"data: {json_data}\n\n"
+
+        # Phase 2: Run code agent and emit execution events
         last_event = None
         async for event in execution.progress():
             last_event = event

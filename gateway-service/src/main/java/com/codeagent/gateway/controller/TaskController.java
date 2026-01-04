@@ -1,5 +1,8 @@
 package com.codeagent.gateway.controller;
 
+import io.netty.channel.ChannelOption;
+import io.netty.handler.timeout.ReadTimeoutHandler;
+import io.netty.handler.timeout.WriteTimeoutHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -7,13 +10,17 @@ import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import reactor.core.publisher.Flux;
+import reactor.netty.http.client.HttpClient;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Task controller that proxies requests to Python agent-service.
@@ -27,10 +34,19 @@ public class TaskController {
     private final WebClient webClient;
 
     public TaskController(@Value("${agent-service.url}") String agentServiceUrl) {
+        // Configure HttpClient with extended timeouts for slow LLM responses
+        HttpClient httpClient = HttpClient.create()
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10000)  // 10s connection timeout
+                .responseTimeout(Duration.ofMinutes(5))  // 5 minute response timeout
+                .doOnConnected(conn -> conn
+                        .addHandlerLast(new ReadTimeoutHandler(5, TimeUnit.MINUTES))
+                        .addHandlerLast(new WriteTimeoutHandler(5, TimeUnit.MINUTES)));
+
         this.webClient = WebClient.builder()
                 .baseUrl(agentServiceUrl)
+                .clientConnector(new ReactorClientHttpConnector(httpClient))
                 .build();
-        log.info("Gateway configured to proxy to: {}", agentServiceUrl);
+        log.info("Gateway configured to proxy to: {} (5 minute timeout)", agentServiceUrl);
     }
 
     /**
