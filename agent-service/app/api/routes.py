@@ -2,20 +2,23 @@
 API Routes
 
 REST endpoints for the code agent:
-- POST /tasks - Submit a new coding task
+- POST /tasks - Submit a new coding task (uses ManagerAgent)
 - GET /tasks/{task_id} - Get task status and result
+- POST /tasks/execute - Execute code directly
 """
 
+import asyncio
 import json
 import os
+import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
-from app.core.task_state import TaskState
+from app.core.task_state import TaskState, TaskStatus, TaskType
 from app.logging_utils import log_request_start, log_request_complete, log_request_failed
 from app.tools.code_executor import CodeExecutor
-from app.agents.planner import PlannerAgent
+from app.api.workflow_events import result_event
 
 from fastapi.responses import StreamingResponse
 
@@ -72,72 +75,158 @@ tasks: dict[str, TaskState] = {}
 @router.post("", response_class=StreamingResponse)
 async def create_task(request: TaskRequest):
     """
-    Create and execute a coding task.
+    Create and execute a coding task using the multi-agent system.
 
     Returns Server-Sent Events (SSE) showing real-time progress.
-    Flow:
-    1. PlannerAgent analyzes and breaks down task
-    2. SSE events for plan (plan_start, plan_analysis, plan_step_identified, plan_complete)
-    3. CodeAgent executes the task
-    4. SSE events for execution (node_start, node_complete, result)
+
+    Flow (Module 12 - ManagerAgent):
+    1. Manager creates execution plan
+    2. For each stage:
+       - Builder generates code
+       - Reviewer validates (with reflection loop on failure)
+    3. DocGen adds documentation
+    4. Manager assembles final result
+
+    SSE Events:
+    - manager_planning_start, manager_planning_complete
+    - stage_start, stage_complete
+    - manager_delegating, builder_complete, reviewer_complete
+    - reflection_start, reflection_complete (on retry)
+    - docgen_complete
+    - manager_complete
+    - result (final output)
     """
-    from app.agents.code_agent import CodeAgent
-    from app.llm import get_llm_client
+    from app.llm import get_registry
+    from app.agents.manager import ManagerAgent
 
-    llm_client = get_llm_client()
-    agent = CodeAgent(
-        identifier_llm=llm_client,
-        executor_llm=llm_client,
-    )
-
-    execution = agent.initiate_task(request.description, request.context)
+    task_id = f"task-{uuid.uuid4().hex[:8]}"
 
     # Log request start
     mock_mode = os.getenv("USE_MOCK_LLM", "false").lower() == "true"
-    log_request_start(execution.task_id, request.description, request.context, mock_mode)
+    log_request_start(task_id, request.description, request.context, mock_mode)
 
-    # Store for GET endpoint
-    tasks[execution.task_id] = execution.state
+    # Get LLM client from registry
+    llm_client = get_registry().get("coder")
 
-    # Create planner agent
-    planner = PlannerAgent(request_id=execution.task_id)
+    # Async queue for real-time event streaming
+    event_queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+    def event_callback(event_name: str, data: dict) -> None:
+        """Callback to push events to queue for real-time streaming."""
+        import datetime
+        event_data = {
+            "event": event_name,
+            "timestamp": datetime.datetime.now().isoformat(),
+            **data
+        }
+        # Put event in queue (non-blocking for sync callback)
+        try:
+            event_queue.put_nowait(event_data)
+        except asyncio.QueueFull:
+            pass  # Drop event if queue is full (shouldn't happen)
+
+    # Create manager with event callback
+    manager = ManagerAgent(
+        llm_client=llm_client,
+        event_callback=event_callback,
+    )
+
+    async def run_manager():
+        """Run the manager and signal completion."""
+        try:
+            result = await manager.run(request.description)
+            await event_queue.put({"_result": result})
+        except Exception as e:
+            await event_queue.put({"_error": str(e)})
+        finally:
+            await event_queue.put(None)  # Signal end
 
     async def event_generator():
-        # Phase 1: Run planner and emit plan events
-        plan, plan_events = await planner.create_plan(request.description)
+        # Start manager in background task
+        manager_task = asyncio.create_task(run_manager())
 
-        for event_data in plan_events:
-            # Format as SSE
-            json_data = json.dumps(event_data)
-            yield f"data: {json_data}\n\n"
+        result = None
+        error = None
 
-        # Phase 2: Run code agent and emit execution events
-        last_event = None
-        async for event in execution.progress():
-            last_event = event
-            yield event.to_sse()
+        try:
+            while True:
+                event_data = await event_queue.get()
 
-        # Log completion
-        final_state = execution.state
-        total_ms = 0
-        if last_event and hasattr(last_event, 'data') and 'total_duration_ms' in last_event.data:
-            total_ms = last_event.data['total_duration_ms']
+                if event_data is None:
+                    # End signal
+                    break
 
-        if final_state.status.value == "completed":
-            log_request_complete(
-                execution.task_id,
-                total_ms,
-                final_state.status.value,
-                len(final_state.generated_code or "")
-            )
-        else:
-            log_request_failed(
-                execution.task_id,
-                total_ms,
-                final_state.error_message or "Unknown error"
-            )
+                if "_result" in event_data:
+                    result = event_data["_result"]
+                    continue
 
-        tasks[execution.task_id] = final_state
+                if "_error" in event_data:
+                    error = event_data["_error"]
+                    continue
+
+                # Stream the event immediately
+                json_data = json.dumps(event_data)
+                yield f"data: {json_data}\n\n"
+
+            # Emit final result
+            if result:
+                final_event = result_event(
+                    task_id=task_id,
+                    status="completed" if result.success else "failed",
+                    generated_code=result.code,
+                    error=result.error_message,
+                    total_duration_ms=result.duration_ms,
+                )
+                yield final_event.to_sse()
+
+                log_request_complete(
+                    task_id,
+                    result.duration_ms,
+                    "completed" if result.success else "failed",
+                    len(result.code)
+                )
+
+                tasks[task_id] = TaskState(
+                    task_id=task_id,
+                    task_type=TaskType.CODE_GENERATION,
+                    input_description=request.description,
+                    context=request.context,
+                    status=TaskStatus.COMPLETED if result.success else TaskStatus.FAILED,
+                    generated_code=result.code,
+                    evaluation_score=1.0 if result.success else 0.0,
+                    evaluation_feedback=f"Generated {result.code_lines} lines of code",
+                )
+            elif error:
+                error_event_data = {
+                    "event": "error",
+                    "error": error,
+                    "task_id": task_id,
+                }
+                yield f"data: {json.dumps(error_event_data)}\n\n"
+
+                log_request_failed(task_id, 0, error)
+
+                tasks[task_id] = TaskState(
+                    task_id=task_id,
+                    task_type=TaskType.CODE_GENERATION,
+                    input_description=request.description,
+                    context=request.context,
+                    status=TaskStatus.FAILED,
+                    error_message=error,
+                )
+
+        except Exception as e:
+            error_event_data = {
+                "event": "error",
+                "error": str(e),
+                "task_id": task_id,
+            }
+            yield f"data: {json.dumps(error_event_data)}\n\n"
+            log_request_failed(task_id, 0, str(e))
+
+        finally:
+            # Ensure manager task is done
+            await manager_task
 
     return StreamingResponse(
         event_generator(),

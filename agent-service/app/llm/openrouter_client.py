@@ -16,8 +16,10 @@ Popular models:
 """
 
 import os
+import time
 from openai import AsyncOpenAI
 from app.core.base_llm import BaseLLMClient, LLMResponse
+from app.logging_utils import log_llm_request, log_llm_response
 from pathlib import Path
 
 
@@ -62,6 +64,7 @@ class OpenRouterClient(BaseLLMClient):
             api_key=api_key,
             base_url="https://openrouter.ai/api/v1",
         )
+        self._call_count = 0
 
     async def generate(
         self,
@@ -71,12 +74,25 @@ class OpenRouterClient(BaseLLMClient):
         max_tokens: int = 2000,
     ) -> LLMResponse:
         """Generate a completion from OpenRouter."""
+        self._call_count += 1
+        call_id = self._call_count
+
         messages = []
 
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
 
         messages.append({"role": "user", "content": prompt})
+
+        # Log the request
+        log_llm_request(
+            agent_name=self.model,
+            purpose=f"LLM call #{call_id}",
+            prompt_preview=prompt,
+            system_preview=system_prompt[:200] if system_prompt else None,
+        )
+
+        start_time = time.time()
 
         response = await self.client.chat.completions.create(
             model=self.model,
@@ -85,12 +101,24 @@ class OpenRouterClient(BaseLLMClient):
             max_tokens=max_tokens,
         )
 
+        duration_ms = (time.time() - start_time) * 1000
+        content = response.choices[0].message.content or ""
+        total_tokens = response.usage.total_tokens if response.usage else 0
+
+        # Log the response
+        log_llm_response(
+            agent_name=self.model,
+            response_preview=content,
+            tokens=total_tokens,
+            duration_ms=duration_ms,
+        )
+
         return LLMResponse(
-            content=response.choices[0].message.content or "",
+            content=content,
             model=self.model,
             prompt_tokens=response.usage.prompt_tokens if response.usage else 0,
             completion_tokens=response.usage.completion_tokens if response.usage else 0,
-            total_tokens=response.usage.total_tokens if response.usage else 0,
+            total_tokens=total_tokens,
         )
 
     async def generate_with_context(

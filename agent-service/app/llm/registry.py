@@ -122,10 +122,10 @@ def _init_default_registry() -> LLMRegistry:
 
     Environment variables:
     - USE_MOCK_LLM=true: Use mock client (no API calls)
-    - LLM_PROVIDER=openrouter: Use OpenRouter
-    - LLM_PROVIDER=grok: Use xAI Grok
-    - OPENROUTER_API_KEY: Auto-selects OpenRouter if set
-    - OPENROUTER_MODEL: Model for OpenRouter (default: anthropic/claude-3.5-sonnet)
+    - OPENROUTER_API_KEY: Required for real LLM calls
+    - OPENROUTER_MODEL: Model to use (default: FREE model)
+
+    IMPORTANT: Always uses FREE models by default to avoid spending credits!
 
     Returns:
         Initialized LLMRegistry with clients for standard roles
@@ -146,33 +146,18 @@ def _init_default_registry() -> LLMRegistry:
         for role in roles:
             registry.register(role, mock_client)
     else:
-        # Determine provider
-        provider = os.getenv("LLM_PROVIDER", "").lower()
+        # Always use OpenRouter with FREE models
+        if not os.getenv("OPENROUTER_API_KEY"):
+            raise ValueError(
+                "OPENROUTER_API_KEY not set. Add it to .env file.\n"
+                "Get a key at: https://openrouter.ai/keys"
+            )
 
-        # Auto-detect based on available API keys
-        if not provider:
-            if os.getenv("OPENROUTER_API_KEY"):
-                provider = "openrouter"
-            elif os.getenv("XAI_API_KEY"):
-                provider = "grok"
-            else:
-                raise ValueError(
-                    "No LLM API key found. Set one of:\n"
-                    "  - OPENROUTER_API_KEY (recommended)\n"
-                    "  - XAI_API_KEY (for Grok)"
-                )
+        from app.llm.openrouter_client import OpenRouterClient
 
-        if provider == "openrouter":
-            from app.llm.openrouter_client import OpenRouterClient
-
-            model = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
-            client = OpenRouterClient(model=model)
-        elif provider == "grok":
-            from app.llm.grok_client import GrokClient
-
-            client = GrokClient()
-        else:
-            raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
+        # DEFAULT TO FREE MODEL - never use paid models without explicit config
+        model = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-exp:free")
+        client = OpenRouterClient(model=model)
 
         for role in roles:
             registry.register(role, client)

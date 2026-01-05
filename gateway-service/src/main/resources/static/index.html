@@ -4,10 +4,16 @@
     <title>SSE Test - Code Agent</title>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script>mermaid.initialize({startOnLoad: false, theme: 'dark'});</script>
+    <!-- Prism.js for syntax highlighting -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
     <style>
         body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
         .container { max-width: 900px; margin: 0 auto; }
-        #events { background: #2d2d2d; padding: 15px; border-radius: 8px; max-height: 300px; overflow-y: auto; margin: 15px 0; }
+        #events { background: #2d2d2d; padding: 15px; border-radius: 8px; max-height: 400px; overflow-y: auto; margin: 15px 0; }
+        /* Only show scrollbar when content overflows */
+        #events:not(:has(.event:nth-child(6))) { overflow-y: hidden; }
         .event { margin: 8px 0; padding: 8px; border-radius: 4px; }
         .node_start { background: #264f78; }
         .node_complete { background: #2d5a2d; }
@@ -18,6 +24,37 @@
         .plan_analysis { background: #3d4a5a; }
         .plan_step_identified { background: #2d4a4a; }
         .plan_complete { background: #2d5a4a; }
+        /* Module 12 Manager events */
+        .manager_received_task { background: #4a2d5a; }
+        .manager_plan { background: #2d5a4a; }
+        .manager_planning_start { background: #4a2d5a; }
+        .manager_planning_complete { background: #2d5a4a; }
+        .manager_execution_start { background: #264f78; }
+        .manager_delegating { background: #3d4a5a; }
+        .manager_assembling { background: #4a4a2d; }
+        .manager_complete { background: #2d5a2d; }
+        /* Module 12 Stage/Step events */
+        .stage_start { background: #264f78; }
+        .stage_complete { background: #2d5a4a; }
+        .step_complete { background: #2d5a2d; }
+        /* Module 12 Agent events */
+        .builder_complete { background: #2d5a2d; }
+        .builder_planning_start { background: #3d4a5a; }
+        .builder_planning_complete { background: #2d5a4a; }
+        .builder_coding_start { background: #264f78; }
+        .builder_coding_complete { background: #2d5a2d; }
+        .reviewer_complete { background: #3d5a4d; }
+        .reviewer_planning_start { background: #4a3d5a; }
+        .reviewer_planning_complete { background: #4a5a3d; }
+        .reviewer_validating_start { background: #264f78; }
+        .reviewer_step_start { background: #3d4a5a; }
+        .reviewer_step_complete { background: #2d5a4a; }
+        .reviewer_validating_complete { background: #3d5a4d; }
+        .docgen_start { background: #3d5a4a; }
+        .docgen_complete { background: #4a5a3d; }
+        /* Module 12 Reflection events */
+        .reflection_start { background: #5a4a2d; }
+        .reflection_complete { background: #4a5a2d; }
         button { padding: 10px 20px; font-size: 16px; margin: 10px 5px 10px 0; cursor: pointer; border: none; border-radius: 4px; }
         button:hover { opacity: 0.8; }
         .btn-run { background: #0e639c; color: white; }
@@ -80,31 +117,9 @@
             <span id="status" class="status idle">Idle</span>
         </div>
 
-        <div class="metrics">
-            <div class="metric">
-                <div class="metric-value" id="totalTime">-</div>
-                <div class="metric-label">Total Time (ms)</div>
-            </div>
-            <div class="metric">
-                <div class="metric-value" id="planSteps">-</div>
-                <div class="metric-label">Plan Steps</div>
-            </div>
-            <div class="metric">
-                <div class="metric-value" id="identifyTime">-</div>
-                <div class="metric-label">Identify (ms)</div>
-            </div>
-            <div class="metric">
-                <div class="metric-value" id="executeTime">-</div>
-                <div class="metric-label">Execute (ms)</div>
-            </div>
-            <div class="metric">
-                <div class="metric-value" id="evaluateTime">-</div>
-                <div class="metric-label">Evaluate (ms)</div>
-            </div>
-        </div>
 
         <div id="plan-section">
-            <h3>📋 Execution Plan</h3>
+            <h3>📋 Manager's Plan</h3>
             <div id="plan-info"></div>
             <div id="plan-diagram"></div>
         </div>
@@ -113,7 +128,7 @@
         <div id="events"><div class="event">Ready. Click "Run Task" to start.</div></div>
 
         <h3>Generated Code:</h3>
-        <pre id="code">Waiting for result...</pre>
+        <pre id="code"><code class="language-python">Waiting for result...</code></pre>
         <button class="btn-run-code" onclick="runCode()">▶ Run Code</button>
 
         <h3>Output:</h3>
@@ -130,12 +145,11 @@
 
         function clearEvents() {
             document.getElementById('events').innerHTML = '<div class="event">Ready. Click "Run Task" to start.</div>';
-            document.getElementById('code').textContent = 'Waiting for result...';
-            document.getElementById('totalTime').textContent = '-';
-            document.getElementById('planSteps').textContent = '-';
-            document.getElementById('identifyTime').textContent = '-';
-            document.getElementById('executeTime').textContent = '-';
-            document.getElementById('evaluateTime').textContent = '-';
+            const codeEl = document.querySelector('#code code');
+            codeEl.textContent = 'Waiting for result...';
+            codeEl.className = 'language-python';  // Reset class for Prism
+            document.getElementById('output').textContent = 'Click "Run Code" to execute the generated code...';
+            document.getElementById('output-time').textContent = '';
             document.getElementById('plan-section').style.display = 'none';
             document.getElementById('plan-info').innerHTML = '';
             document.getElementById('plan-diagram').innerHTML = '';
@@ -198,8 +212,106 @@
 
                         const time = new Date(json.timestamp).toLocaleTimeString();
 
-                        // Handle plan events
-                        if (json.event === 'plan_start') {
+                        // ========== Manager Events ==========
+                        if (json.event === 'manager_received_task') {
+                            document.getElementById('plan-section').style.display = 'block';
+                            document.getElementById('plan-info').innerHTML = `<strong>Task:</strong> ${escapeHtml(json.task)}`;
+                            eventDiv.textContent = `${time} 📋 MANAGER - Received task`;
+                            setStatus('planning', 'Planning...');
+                        } else if (json.event === 'manager_plan') {
+                            // steps is an array like ["Use SoftwareBuilderAgent to generate code", ...]
+                            const stepsHtml = json.steps ? json.steps.map((s, i) => `${i+1}. ${s}`).join('<br>') : '';
+                            document.getElementById('plan-info').innerHTML += `<br><br><strong>Plan:</strong><br>${stepsHtml}`;
+                            document.getElementById('plan-info').innerHTML += `<br><br><strong>Team:</strong> ${escapeHtml(json.team_summary)}`;
+                            // Show full plan in event
+                            const planText = json.steps ? json.steps.map((s, i) => `${i+1}. ${s}`).join(' | ') : '';
+                            eventDiv.textContent = `${time} ✅ MANAGER - Plan: ${planText}`;
+                        } else if (json.event === 'manager_delegating') {
+                            eventDiv.textContent = `${time} 🔄 MANAGER - Delegated to ${json.agent} (${json.agent_id}) to ${json.action}`;
+                        } else if (json.event === 'manager_execution_start') {
+                            eventDiv.textContent = `${time} 🚀 MANAGER - Execution started`;
+                            setStatus('running', 'Executing...');
+                        } else if (json.event === 'manager_complete') {
+                            const icon = json.success ? '✅' : '❌';
+                            const status = json.success ? 'SUCCESS' : 'FAILED';
+                            eventDiv.textContent = `${time} ${icon} MANAGER - ${status} (${json.total_attempts} attempt(s), ${json.duration_ms}ms)`;
+                            if (!json.success) {
+                                eventDiv.className = 'event error';
+                                if (json.error_message) {
+                                    eventDiv.textContent += ` - ${json.error_message}`;
+                                }
+                            }
+                        }
+                        // ========== Builder Events ==========
+                        else if (json.event === 'builder_planning_start') {
+                            eventDiv.textContent = `${time} 🔨 BUILDER (${json.agent_id}) - Received task, planning implementation...`;
+                        } else if (json.event === 'builder_planning_complete') {
+                            // Show full plan, not truncated
+                            eventDiv.textContent = `${time} 📋 BUILDER (${json.agent_id}) - Plan: ${json.plan}`;
+                        } else if (json.event === 'builder_coding_start') {
+                            eventDiv.textContent = `${time} ⚡ BUILDER (${json.agent_id}) - Generating code...`;
+                        } else if (json.event === 'builder_coding_complete') {
+                            eventDiv.textContent = `${time} ✅ BUILDER (${json.agent_id}) - Generated ${json.code_lines} lines`;
+                        }
+                        // ========== Reviewer Events ==========
+                        else if (json.event === 'reviewer_planning_start') {
+                            eventDiv.textContent = `${time} 🔍 REVIEWER (${json.agent_id}) - Received code, planning validation (${json.code_lines} lines)...`;
+                        } else if (json.event === 'reviewer_planning_complete') {
+                            eventDiv.textContent = `${time} 📋 REVIEWER (${json.agent_id}) - Plan: ${json.plan}`;
+                        } else if (json.event === 'reviewer_step_start') {
+                            eventDiv.textContent = `${time} 🔹 REVIEWER (${json.agent_id}) - ${json.description}...`;
+                        } else if (json.event === 'reviewer_step_complete') {
+                            // Review step shows blocking/non-blocking issues
+                            const icon = json.passed ? '✅' : '❌';
+                            eventDiv.innerHTML = `${time} ${icon} REVIEWER (${escapeHtml(json.agent_id)}) - ${escapeHtml(json.step)}: ${escapeHtml(json.message)}`;
+
+                            // Show blocking issues if any
+                            if (json.blocking_issues && json.blocking_issues.length > 0) {
+                                const issuesList = json.blocking_issues.map(i =>
+                                    `<div style="margin-left: 20px; color: #f44336;">⛔ ${escapeHtml(i.message)}${i.suggestion ? ': ' + escapeHtml(i.suggestion) : ''}</div>`
+                                ).join('');
+                                eventDiv.innerHTML += issuesList;
+                            }
+
+                            // Show non-blocking issues if any
+                            if (json.nonblocking_issues && json.nonblocking_issues.length > 0) {
+                                const nitsList = json.nonblocking_issues.map(i =>
+                                    `<div style="margin-left: 20px; color: #ffc107;">💡 ${escapeHtml(i.message)}${i.suggestion ? ': ' + escapeHtml(i.suggestion) : ''}</div>`
+                                ).join('');
+                                eventDiv.innerHTML += nitsList;
+                            }
+
+                            if (!json.passed) {
+                                eventDiv.className = 'event error';
+                            }
+                        } else if (json.event === 'reviewer_complete') {
+                            const icon = json.passed ? '✅' : '❌';
+                            eventDiv.innerHTML = `${time} ${icon} REVIEWER (${escapeHtml(json.agent_id)}) - ${escapeHtml(json.message)}`;
+
+                            // Show blocking issues summary
+                            if (json.blocking_issues && json.blocking_issues.length > 0) {
+                                const issuesList = json.blocking_issues.slice(0, 3).map(msg =>
+                                    `<div style="margin-left: 20px; color: #f44336;">⛔ ${escapeHtml(msg)}</div>`
+                                ).join('');
+                                eventDiv.innerHTML += issuesList;
+                            }
+
+                            if (!json.passed) eventDiv.className = 'event error';
+                        }
+                        // ========== DocGen Events ==========
+                        else if (json.event === 'docgen_start') {
+                            eventDiv.textContent = `${time} 📝 DOCGEN (${json.agent_id}) - Adding documentation to ${json.code_lines} lines...`;
+                        } else if (json.event === 'docgen_complete') {
+                            eventDiv.textContent = `${time} ✅ DOCGEN (${json.agent_id}) - Added README (${json.readme_lines} lines)`;
+                        }
+                        // ========== Reflection Events ==========
+                        else if (json.event === 'reflection_start') {
+                            const issueList = json.issues.slice(0, 2).join('; ');
+                            eventDiv.textContent = `${time} 🔄 REFLECTION - ${json.blocking_issues} blocking issue(s), retrying... (${json.attempt}/${json.max_attempts})`;
+                            eventDiv.className = 'event retry';
+                        }
+                        // ========== Legacy Plan Events (Module 11) ==========
+                        else if (json.event === 'plan_start') {
                             document.getElementById('plan-section').style.display = 'block';
                             document.getElementById('plan-info').innerHTML = `<strong>Task:</strong> ${escapeHtml(json.task)}`;
                             eventDiv.textContent = `${time} 📋 PLAN START - ${json.task}`;
@@ -212,22 +324,23 @@
                             eventDiv.textContent = `${time} 📌 STEP: ${json.step_id} - ${json.task}${deps}`;
                         } else if (json.event === 'plan_complete') {
                             document.getElementById('plan-info').innerHTML += `<br><strong>Steps:</strong> ${json.total_steps} | <strong>Parallel stages:</strong> ${json.parallel_stages}`;
-                            document.getElementById('planSteps').textContent = json.total_steps;
 
                             // Render Mermaid diagram
-                            const diagramDiv = document.getElementById('plan-diagram');
-                            const mermaidId = 'mermaid-' + Date.now();
-                            diagramDiv.innerHTML = `<pre class="mermaid" id="${mermaidId}">${json.mermaid}</pre>`;
-                            try {
-                                mermaid.init(undefined, document.getElementById(mermaidId));
-                            } catch (e) {
-                                console.error('Mermaid error:', e);
+                            if (json.mermaid) {
+                                const diagramDiv = document.getElementById('plan-diagram');
+                                const mermaidId = 'mermaid-' + Date.now();
+                                diagramDiv.innerHTML = `<pre class="mermaid" id="${mermaidId}">${json.mermaid}</pre>`;
+                                try {
+                                    mermaid.init(undefined, document.getElementById(mermaidId));
+                                } catch (e) {
+                                    console.error('Mermaid error:', e);
+                                }
                             }
 
                             eventDiv.textContent = `${time} ✅ PLAN COMPLETE - ${json.total_steps} steps, ${json.parallel_stages} parallel stages`;
                             setStatus('running', 'Executing...');
                         }
-                        // Handle code agent events
+                        // ========== Legacy Code Agent Events ==========
                         else if (json.event === 'node_start') {
                             eventDiv.textContent = `${time} 🔵 ${json.node.toUpperCase()} - ${json.message}`;
                         } else if (json.event === 'node_complete') {
@@ -238,14 +351,30 @@
                             if (metricEl) metricEl.textContent = json.duration_ms.toFixed(0);
                         } else if (json.event === 'retry') {
                             eventDiv.textContent = `${time} 🔄 RETRY ${json.attempt}/${json.max_attempts} - ${json.reason}`;
-                        } else if (json.event === 'result') {
-                            eventDiv.textContent = `${time} 🎉 COMPLETE - ${json.status} (${json.total_duration_ms.toFixed(0)}ms total)`;
-                            document.getElementById('code').textContent = json.generated_code || 'No code generated';
-                            document.getElementById('totalTime').textContent = json.total_duration_ms.toFixed(0);
-                            setStatus(json.status === 'completed' ? 'success' : 'error', json.status.toUpperCase());
+                        }
+                        // ========== Final Result ==========
+                        else if (json.event === 'result') {
+                            const isSuccess = json.status === 'completed';
+                            const icon = isSuccess ? '🎉' : '❌';
+                            eventDiv.textContent = `${time} ${icon} ${json.status.toUpperCase()} (${json.total_duration_ms.toFixed(0)}ms)`;
+                            if (json.error) {
+                                eventDiv.textContent += ` - ${json.error}`;
+                            }
+                            if (!isSuccess) eventDiv.className = 'event error';
+
+                            // Set code and apply syntax highlighting
+                            const codeEl = document.querySelector('#code code');
+                            codeEl.textContent = json.generated_code || 'No code generated';
+                            Prism.highlightElement(codeEl);
+
+                            setStatus(isSuccess ? 'success' : 'error', json.status.toUpperCase());
                         } else if (json.event === 'error') {
                             eventDiv.textContent = `${time} ❌ ERROR - ${json.error}`;
                             setStatus('error', 'Error');
+                        }
+                        // ========== Unknown Events (show raw) ==========
+                        else {
+                            eventDiv.textContent = `${time} 📌 ${json.event.toUpperCase()} - ${JSON.stringify(json).slice(0, 100)}...`;
                         }
 
                         eventsDiv.appendChild(eventDiv);
@@ -259,7 +388,7 @@
         }
 
         async function runCode() {
-            const code = document.getElementById('code').textContent;
+            const code = document.querySelector('#code code').textContent;
             if (code === 'Waiting for result...' || !code.trim()) {
                 document.getElementById('output').innerHTML = '<span class="output-error">No code to run. Generate code first.</span>';
                 document.getElementById('output-time').textContent = '';
